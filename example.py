@@ -31,11 +31,17 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20]):
     return obs, t1, t2, rv, alpha, m
 
 
-
 # TODCOR Example Code:
+
 # Produce simulated observed spectrum by combining two shifted templates
-obs, t1, t2, rv, alpha, m = examplePhoenixTemplate(alpha=0.4)   # Phoenix templates based simulated observed spectrum
-#obs, t1, t2, rv, alpha, m = exampleRandTemplate(alpha=0.4)     # Short random templates based simulated observed spectrum
+templateType = 'Phoenix'
+#templateType = 'Random'
+if templateType == 'Phoenix':
+    obs, t1, t2, rv, alpha, m = examplePhoenixTemplate(alpha=0.4)   # Phoenix templates based simulated observed spectrum
+elif templateType == 'Random':
+    obs, t1, t2, rv, alpha, m = exampleRandTemplate(alpha=0.4)     # Short random templates based simulated observed spectrum
+else:
+    raise ValueError('Unknown templateType: %s' % templateType)
 
 # For best results on a short spectrum, templates should be wider than the spectrum by m elements on each side
 #shortSpectrum = False
@@ -54,7 +60,7 @@ ccf12 = genNormCorr(t1, t2, m)            # CCF of t1  vs. t2
 plt.figure(1)
 ccfX = np.arange(-m, m + 1)
 plt.plot(ccfX, ccf1, ccfX, ccf2, ccfX, ccf12); plt.grid(True)
-plt.title('Templates 1d CCFs')
+plt.title('%s-Templates 1d CCFs' % templateType)
 plt.legend(['Observed vs. Temp1', 'Observed vs. Temp2', 'Temp1 vs. Temp2'])
 plt.xlabel('Lag (km/s)')
 plt.ylabel('Correlation')
@@ -71,16 +77,27 @@ corrM, _ = todcor(obs, t1, t2, m, bestAlpha)                # TODCOR with input 
 maxIdx = np.unravel_index(np.argmax(corrM), corrM.shape)    # max TODCOR indices
 maxVal = corrM[maxIdx]                                      # max TODCOR value
 
-# Plot the resulting best-alpha TODCOR matrix as an image
-plt.figure(2)
-im1 = plt.imshow(corrM, extent=[-m-0.5, m+0.5, -m-0.5, m+0.5], origin='lower', aspect='auto', cmap='viridis')
+# Plot the best-alpha TODCOR matrix as an image + cuts at maximum correlation
+#plt.figure(2)
+fig, ((ax, ax1),(ax2, axn)) = plt.subplots(2, 2, figsize=(10, 10), gridspec_kw={'height_ratios': [3, 1], 'width_ratios': [3, 1]}, num=2)
+im1 = ax.imshow(corrM, extent=[-m-0.5, m+0.5, -m-0.5, m+0.5], origin='lower', aspect='auto', cmap='viridis')
 line = np.arange(-m-0.5,m+0.55,0.1); point = line * 0
-plt.plot(line,point+maxIdx[0]-m,'-r', alpha=0.25)
-plt.plot(point+maxIdx[1]-m, line,'-r', alpha=0.25)
-plt.colorbar(im1, label='Correlation')
-plt.xlabel('Lag 2 (km/s)')
-plt.ylabel('Lag 1 (km/s)')
-plt.title('TODCOR:  CCF[%d,%d]=%1.3f  Best_Alpha=%1.3f'%(maxIdx[0]-m, maxIdx[1]-m, maxVal, bestAlpha))
+ax.plot(line,point+maxIdx[0]-m,'-r', alpha=0.25)
+ax.plot(point+maxIdx[1]-m, line,'-r', alpha=0.25); #ax.grid(True)
+ax.set_xlim([-m,m]); ax.set_ylim([-m,m])
+#plt.colorbar(im1, label='Correlation')
+ax2.plot(ccfX, corrM[maxIdx[0],:],'r',alpha=0.4); ax2.grid(True)
+ax2.set_xlim([-m,m])
+ax2.set_ylabel('Correlation')
+ax2.legend(['lag 1 = %1.0f km/s'%(maxIdx[0]-m)])
+ax2.set_xlabel('Lag 2 (km/s)')
+ax1.plot(corrM[:,maxIdx[1]], ccfX,'r',alpha=0.4); ax1.grid(True)
+ax1.set_ylim([-m,m])
+ax1.set_xlabel('Correlation')
+ax1.legend(['lag 2 = %1.0f km/s'%(maxIdx[1]-m)])
+ax.set_ylabel('Lag 1 (km/s)')
+ax.set_title('%s-Templates TODCOR:  CCF[%d,%d]=%1.3f  Best_Alpha=%1.3f'%(templateType, maxIdx[0]-m, maxIdx[1]-m, maxVal, bestAlpha))
+axn.axis('off')
 
 plt.show()
 
