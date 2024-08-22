@@ -15,6 +15,10 @@ This code implements the TODCOR algorithm with the following improvements:
 
 **template_4500K_45_0_6198A-6402A_10K.csv** - An example processed Phoenix template of Teff=4500K, logg=4.5, M/H=0, with resolution R=10000, in the spectral range 6198A - 6402A, with wavelength resolution of 1 km/s.
 
+**Phoenix_Templates_1d_CCFs.png** - The first plot produced by example.py
+
+**Phoenix_Templates_TODCOR.png** - The second plot produced by example.py
+
 # Acknowledgment:
 If you use this code in your research, please acknowledge by citing Zucker, S., & Mazeh, T. 1994, ApJ, 420, 806.
 
