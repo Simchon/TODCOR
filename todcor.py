@@ -227,9 +227,9 @@ def todcor(obs, t1, t2, m, alpha=None):
         raise ValueError("The two template arrays must have the same length.")
     if n > l:
         raise ValueError("The obs array cannot be longer than the template arrays.")
-    if type(alpha)==int and alpha<0:
+    if (alpha is not None) and not (np.isfinite(alpha) and (alpha>0)):
         alpha = None
-        warnings.warn("alpha must be positive. Switched to alpha-fitting mode")
+        warnings.warn("alpha must be a finite positive. Switched to alpha-fitting mode")
     
     # Calculate the 1D cross-correlation for each template with the observed spectrum
     ccf1V = genNormCorr(obs, t1, m)                     # General Normalized-Correlation array
