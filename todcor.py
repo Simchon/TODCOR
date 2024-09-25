@@ -227,7 +227,7 @@ def todcor(obs, t1, t2, m, alpha=None):
         raise ValueError("The two template arrays must have the same length.")
     if n > l:
         raise ValueError("The obs array cannot be longer than the template arrays.")
-    if (alpha is not None) and not (np.isfinite(alpha) and (alpha>0)):
+    if (alpha is not None) and not (np.isfinite(alpha) and (alpha>=0)):
         alpha = None
         warnings.warn("alpha must be a finite positive. Switched to alpha-fitting mode")
     
