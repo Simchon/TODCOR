@@ -37,7 +37,7 @@ def winNormCorr(x, y, m, n=None):
         lagV = np.arange(-m,m+1)
         ccfIdx = (lagV[None,:] - lagV[:,None]) + 2*m    # s2-s1 index of ccf12
         corr = ccf12[ccfIdx]                            # Fill the correlation matrix
-        xStd = np.zeros(2*m+1) + np.std(x);  yStd = np.zeros(2*m+1) + np.std(y)
+        xStd = np.zeros(2*m+1, dtype='f4') + np.std(x);  yStd = np.zeros(2*m+1, dtype='f4') + np.std(y)
         return corr, xStd, yStd
     
     xn = x[k-m : l-(k-m)]; yn = y[k-m : l-(k-m)]        # Remove unneeded elements
@@ -50,16 +50,17 @@ def winNormCorr(x, y, m, n=None):
     #yn = y
     
     # Cumulative sums (for window mean & std)
-    xSum = np.append(0, np.cumsum(xn))        # zero appended to enable summation from start
-    ySum = np.append(0, np.cumsum(yn))
-    x2Sum = np.append(0, np.cumsum(xn * xn))
-    y2Sum = np.append(0, np.cumsum(yn * yn))
+    zero = np.float32(0)
+    xSum = np.append(zero, np.cumsum(xn))        # zero appended to enable summation from start
+    ySum = np.append(zero, np.cumsum(yn))
+    x2Sum = np.append(zero, np.cumsum(xn * xn))
+    y2Sum = np.append(zero, np.cumsum(yn * yn))
     
-    corr = np.zeros((2*m+1, 2*m+1))
+    corr = np.zeros((2*m+1, 2*m+1), dtype='f4')
     
     # Calculate the zero-lag correlation
     xLagV = np.arange(2*m+1)
-    xySum = np.append(0, np.cumsum(xn * yn))      # comulative cross corr
+    xySum = np.append(zero, np.cumsum(xn * yn))   # comulative cross corr
     xWinS = xSum[xLagV+n] - xSum[xLagV]           # x sum within window
     yWinS = ySum[xLagV+n] - ySum[xLagV]           # y sum within window
     xStd  = np.sqrt( (x2Sum[xLagV+n] - x2Sum[xLagV])/n - (xWinS/n)**2 )[::-1]   # x STD within window
@@ -67,15 +68,18 @@ def winNormCorr(x, y, m, n=None):
     corr[(xLagV,xLagV)] = ((xySum[xLagV+n] - xySum[xLagV]) - xWinS * yWinS / n)[::-1]   # correlation in n-elements window
     
     # Calculate positive & negative delta-lag correlations
+    xySum = np.zeros_like(xn)
     dLagV = np.arange(1,2*m + 1)            # delta-lag Vector (yLag-xLag)
     for dLag in dLagV:
         yLagV = np.arange(dLag,2*m+1); xLagV = np.arange(2*m+1-dLag)
-        xySum = np.append(0, np.cumsum(xn[dLag:] * yn[:l-dLag]))      # comulative cross corr
+        #xySum = np.append(zero, np.cumsum(xn[dLag:] * yn[:l-dLag]))      # comulative cross corr
+        xySum[1:l-dLag+1] = np.cumsum(xn[dLag:] * yn[:l-dLag])            # comulative cross corr
         corr[(xLagV,yLagV)] = ((xySum[xLagV+n] - xySum[xLagV]) - xWinS[xLagV+dLag] * yWinS[xLagV] / n)[::-1]  # correlation in n-elements window
         
-        xLagV = np.arange(dLag,2*m+1); yLagV = np.arange(2*m+1-dLag)
-        xySum = np.append(0, np.cumsum(xn[:l-dLag] * yn[dLag:]))      # comulative cross corr
-        corr[(xLagV,yLagV)] = ((xySum[yLagV+n] - xySum[yLagV]) - xWinS[yLagV] * yWinS[yLagV+dLag] / n)[::-1]  # correlation in n-elements window        
+        #xLagV = np.arange(dLag,2*m+1); yLagV = np.arange(2*m+1-dLag)
+        #xySum = np.append(zero, np.cumsum(xn[:l-dLag] * yn[dLag:]))      # comulative cross corr
+        xySum[1:l-dLag+1] = np.cumsum(xn[:l-dLag] * yn[dLag:])            # comulative cross corr
+        corr[(yLagV,xLagV)] = ((xySum[xLagV+n] - xySum[xLagV]) - xWinS[xLagV] * yWinS[xLagV+dLag] / n)[::-1]  # correlation in n-elements window
 
     # Normalize by the denominator: N*xStd*yStd
     corr /= (n * xStd[:,None] * yStd[None,:])
@@ -122,12 +126,13 @@ def genNormCorr(x, y, m):
     #yn = y
     
     # Cumulative sums (for overlap mean & std)
+    zero = np.float32(0)
     xSum = np.cumsum(xn)
     ySum = np.cumsum(yn)
-    x2Sum = np.append(0, np.cumsum(xn * xn))   # zero appended to enable summation from start
-    y2Sum = np.append(0, np.cumsum(yn * yn))
+    x2Sum = np.append(zero, np.cumsum(xn * xn))   # zero appended to enable summation from start
+    y2Sum = np.append(zero, np.cumsum(yn * yn))
     
-    corr = np.zeros(2 * m + 1); denom = np.zeros(2 * m + 1)
+    corr = np.zeros(2 * m + 1,dtype='f4'); denom = np.zeros_like(corr)
     
     # Calculate the zero-lag correlation
     corr[m] = np.sum(xn * yn[k:-k]);
@@ -181,7 +186,7 @@ def exactNormCorr(x, y, m):
     x2Sum = np.cumsum(xn * xn)
     y2Sum = np.cumsum(yn * yn)
     
-    corr = np.zeros(2 * m + 1); denom = np.zeros(2 * m + 1)
+    corr = np.zeros(2 * m + 1, dtype='f4'); denom = np.zeros_like(corr)
     
     # Calculate the zero-lag correlation
     #corr[m] = np.sum((xn - xSum[-1]/n) * yn);  denom[m] = n * np.std(xn) * np.std(yn)
@@ -235,8 +240,8 @@ def todcor(obs, t1, t2, m, alpha=None):
     ccf1V = genNormCorr(obs, t1, m)                     # General Normalized-Correlation array
     ccf2V = genNormCorr(obs, t2, m)                     # General Normalized-Correlation array
     ccf12, std1, std2 = winNormCorr(t1, t2, m, n)       # Windowed Normalized-Correlation matrix & STD arrays
-    ccf1 = ccf1V[:,None] + np.zeros(ccf2V.size)[None,:] # ccf1 matrix
-    ccf2 = ccf2V[None,:] + np.zeros(ccf1V.size)[:,None] # ccf2 matrix
+    ccf1 = ccf1V[:,None] + np.zeros_like(ccf2V)[None,:] # ccf1 matrix
+    ccf2 = ccf2V[None,:] + np.zeros_like(ccf1V)[:,None] # ccf2 matrix
     
     stdM = std2[None,:] / std1[:,None]                  # std matrix
     if alpha is None:                                   # The extreme-point normalized alpha matrix

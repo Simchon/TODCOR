@@ -1,22 +1,23 @@
 import numpy as np
 import warnings
+import time
 import pandas as pd
 import matplotlib.pyplot as plt
 
 from todcor import *
 
-def exampleRandTemplate(alpha=0.6, rv=[3,-5]):
+def exampleRandTemplate(alpha=0.6, rv=[3,-5], tempLen=100):
     # Returns a simulated observed spectrum built by combining two shifted random vectors   
     np.random.seed(42)
-    N = 100
-    t1 = np.random.rand(N)                                # First template
-    t2 = np.random.rand(N)                                # Second template
+    t1 = np.random.rand(tempLen).astype('f4')             # First template
+    t2 = np.random.rand(tempLen).astype('f4')             # Second template
     obs = np.roll(t1, rv[0]) + alpha * np.roll(t2, rv[1]) # Simulated observed spectrum
     m = 10                                                # CCF range from lag -m to +m
     dRV = 1.0
     return obs, t1, t2, rv, alpha, m, dRV
 
-def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200):
+
+def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200, tempLen=None):
     """
     Returns a simulated observed spectrum built by combining two shifted, Phoenix-based, templates.
     Templates flux is normalized and wavelength is at even log steps
@@ -38,10 +39,14 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200):
     C = 299792.458                                         # speed of light (km/s)
     #df1 = pd.read_csv('template_6000K_45_0_6198A-6402A.csv')
     df1 = pd.read_csv('template_6000K_45_0_6198A-6402A_10K.csv')
-    wv1 = df1.values[:,0]; t1 = df1.values[:,1]            # First template
+    wv1 = df1.values[:,0]; t1 = df1.values[:,1].astype('f4')            # First template
     #df2 = pd.read_csv('template_4500K_45_0_6198A-6402A.csv')
     df2 = pd.read_csv('template_4500K_45_0_6198A-6402A_10K.csv')
-    wv2 = df2.values[:,0]; t2 = df2.values[:,1]            # Second template
+    wv2 = df2.values[:,0]; t2 = df2.values[:,1].astype('f4')            # Second template
+
+    if type(tempLen)==int and tempLen>0 and tempLen<t1.size:            # shorten the templates
+        wv1 = wv1[:tempLen];  t1 = t1[:tempLen]
+        wv2 = wv2[:tempLen];  t2 = t2[:tempLen]
 
     if not np.array_equal(wv1,wv2):
         raise ValueError("The two templates must have the same wavelengths array.")
@@ -63,6 +68,7 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200):
 templateType = 'Phoenix'
 #templateType = 'Random'
 if templateType == 'Phoenix':
+    #obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=0.4, maxRV=125, tempLen=5700)   # Phoenix templates based simulated observed spectrum
     obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=0.4)   # Phoenix templates based simulated observed spectrum
 elif templateType == 'Random':
     obs, t1, t2, rv, alpha, m, dRV = exampleRandTemplate(alpha=0.4)     # Short random templates based simulated observed spectrum
@@ -79,7 +85,10 @@ else:
     pass               # Equal-length templates and spectrum. Should be fine if spectrum_length >> m
 
 # Compute the templates 1d CCFs
+s1 = time.time()
 ccf1 = genNormCorr(obs, t1, m)            # CCF of obs vs. t1
+print(f"Spectrum/Template length = {obs.size}/{t1.size}, lags = {2*m+1}, genNormCorr runtime = {(time.time()-s1):1.4f}")
+
 ccf2 = genNormCorr(obs, t2, m)            # CCF of obs vs. t2
 ccf12 = genNormCorr(t1, t2, m)            # CCF of t1  vs. t2
 
@@ -93,14 +102,18 @@ plt.xlabel('Lag (km/s)')
 plt.ylabel('Correlation')
 
 # Compute the TODCOR correlation matrix, first for finding the best flux ratio (alpha)
+s1 = time.time()
 corrM1, alphaM = todcor(obs, t1, t2, m)                     # TODCOR alpha-fitting mode
+print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, Alpha-fit TODCOR runtime = {(time.time()-s1):1.4f}")
 
 # Find best alpha using the maximum-CCF indices
 maxIdx1 = np.unravel_index(np.argmax(corrM1), corrM1.shape) # max TODCOR indices
 bestAlpha = alphaM[maxIdx1]                                 # best alpha at max TODCOR indices
 
 # Recalculate TODCOR using the best alpha
+s1 = time.time()
 corrM, _ = todcor(obs, t1, t2, m, bestAlpha)                # TODCOR with input alpha
+print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, fixed-alpha TODCOR runtime = {(time.time()-s1):1.4f}")
 maxIdx = np.unravel_index(np.argmax(corrM), corrM.shape)    # max TODCOR indices
 bestRV = (np.array(maxIdx)-m) * dRV                         # The best RV shifts of the two templates
 maxVal = corrM[maxIdx]                                      # max TODCOR value
