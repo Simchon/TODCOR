@@ -208,7 +208,56 @@ def exactNormCorr(x, y, m):
     return corr
 
 
-def todcor(obs, t1, t2, m, alpha=None):
+def calcWeights(f, snr=None, w=None):
+    """
+    Compute the weights of a multi-order spectrum.
+    Parameters:
+        f (list of arrays): List of signal arrays (one array per order).
+        snr (np.ndarray or None): Signal-to-noise ratio values per order.
+        w (np.ndarray or None): Predefined weights per order.
+    Returns:
+        np.ndarray: Computed weights.
+    """
+    weights = np.array([np.var(x) * len(x) for x in f]) # Partial weight (default): var(f[i]) * len(f[i])
+    if snr is not None:
+        weights *= (snr * snr)                          # Likelihood weight: snr[i]^2*var(f[i])*len(f[i])
+    elif w is not None:
+        weights = w                                     # User-defined weights
+    return weights
+
+
+def ccf1d(f, t, m, snr=None, w=None):
+    """
+    Compute the cross-correlation function, including support for a multi-order spectrum and template.
+    The per-order CCFs of multi-order inputs are weighted-averaged using weight[i]=snr[i]^2*var(f[i])*len(f[i]) of each order
+    Parameters:
+        f (single, or list of, np.ndarray): Observed spectrum - single or multi-order.
+        t (single, or list of, np.ndarray): Template - single or multi-order.
+        m (int): The maximum lag to consider in both directions.
+        snr (np.ndarray or None): Signal-to-noise ratio (same length as f & t) - Used for weighting multi-order CCFs
+        w (np.ndarray or None): User defined multi-order weights (same length as f & t).
+    Returns:
+        np.ndarray: (Combined for multi-order) Cross Correlation Function.
+    """
+    if isinstance(f, np.ndarray) and isinstance(t, np.ndarray):
+        return genNormCorr(f, t, m)
+
+    elif isinstance(f, list) and isinstance(t, list):
+        if len(f) != len(t):
+            raise ValueError("If f and t are lists (multi-order), they must have the same length.")
+
+        # Compute the CCFs and weights of all orders
+        CCFMat = np.array([genNormCorr(f[i], t[i], m) for i in range(len(f))])
+        weights = calcWeights(f, snr, w)
+
+        # Combined CCF
+        comCCF = np.average(CCFMat, weights=weights, axis=0)
+        return comCCF
+    else:
+        raise TypeError("f and t must both be either numpy arrays or multi-order lists of equal length.")
+
+
+def todcor(obs=None, t1=None, t2=None, m=None, alpha=None, ccfInput=None, outAll=False):
     """
     The exact TODCOR algorithm (including fixes to the original TODCOR) to find the best radial-velocity shifts for a binary star system.
 
@@ -217,8 +266,14 @@ def todcor(obs, t1, t2, m, alpha=None):
     t1 (np.ndarray): The template spectrum of the first star.
     t2 (np.ndarray): The template spectrum of the second star.
     m (int): The maximum lag to consider in both directions.
+    obs, t1, t2 & m are optional, as they are used only if ccfInput is None.
     alpha (float): The flux ratio of the two components (to be normalized).
     If alpha==None, the optimal positive alpha (highest CCF), per matrix element, is derived and used.
+    ccfInput (np.ndarray): An optional structured array with precomputed fields (ccf1, ccf2, ccf12, std12)
+                           of shape (2*m+1, 2*m+1). If provided, obs, t1, t2 & m are not needed,
+                           as the cross-correlation components are extracted from it, skipping their derivation.
+    outAll (bool): If True, also returns a structured numpy array (shape (2*m+1, 2*m+1)) with fields
+                   'ccf1', 'ccf2', 'ccf12' and 'std12'.
     
     To derive the Exact TodCor result, inputs should fulfill: len(t1)=len(t2)=len(obs)+2*m
     Otherwise, the regular TodCor result is returned if: len(t1)=len(t2) >= len(obs)
@@ -226,28 +281,31 @@ def todcor(obs, t1, t2, m, alpha=None):
     Returns:
     np.ndarray: A 2D array of cross-correlation values.
     np.ndarray: A 2D array of optimal alpha(s1_index, s2_index)
+    Optionally, np.ndarray: A structured numpy array with ccf & std matrices if outAll is True.
     """
-    l = len(t1); n = len(obs)
-    if l != len(t2):
-        raise ValueError("The two template arrays must have the same length.")
-    if n > l:
-        raise ValueError("The obs array cannot be longer than the template arrays.")
-    if (alpha is not None) and not (np.isfinite(alpha) and (alpha>=0)):
-        alpha = None
-        warnings.warn("alpha must be a finite positive. Switched to alpha-fitting mode")
-    
-    # Calculate the 1D cross-correlation for each template with the observed spectrum
-    ccf1V = genNormCorr(obs, t1, m)                     # General Normalized-Correlation array
-    ccf2V = genNormCorr(obs, t2, m)                     # General Normalized-Correlation array
-    ccf12, std1, std2 = winNormCorr(t1, t2, m, n)       # Windowed Normalized-Correlation matrix & STD arrays
-    ccf1 = ccf1V[:,None] + np.zeros_like(ccf2V)[None,:] # ccf1 matrix
-    ccf2 = ccf2V[None,:] + np.zeros_like(ccf1V)[:,None] # ccf2 matrix
-    
-    stdM = std2[None,:] / std1[:,None]                  # std matrix
+    if ccfInput is None:
+        l = len(t1); n = len(obs)
+        if l != len(t2):
+            raise ValueError("The two template arrays must have the same length.")
+        if n > l:
+            raise ValueError("The obs array cannot be longer than the template arrays.")
+        if (alpha is not None) and not (np.isfinite(alpha) and (alpha>=0)):
+            alpha = None
+            warnings.warn("alpha must be a finite positive. Switched to alpha-fitting mode")
+        M = 2*m + 1
+        # Calculate the 1D cross-correlation for each template with the observed spectrum
+        ccf1V = genNormCorr(obs, t1, m)                     # General Normalized-Correlation array
+        ccf2V = genNormCorr(obs, t2, m)                     # General Normalized-Correlation array
+        ccf12, std1, std2 = winNormCorr(t1, t2, m, n)       # Windowed Normalized-Correlation matrix & STD arrays
+        ccf1 = np.tile(ccf1V, (M,1)).T;  ccf2 = np.tile(ccf2V, (M,1)) # ccf1 & ccf2 matrices
+        std12 = std2[None,:] / std1[:,None]                 # std-ratio matrix
+    else:                                                   # Use the structured array input
+        ccf1,ccf2,ccf12,std12 = ccfInput['ccf1'],ccfInput['ccf2'],ccfInput['ccf12'],ccfInput['std12']
+
     if alpha is None:                                   # The extreme-point normalized alpha matrix
         alphaM = ( (ccf1 * ccf12 - ccf2) / (ccf2 * ccf12 - ccf1) ).clip(min=0)
     else:
-        alphaM = alpha * stdM                           # Normalized alpha matrix
+        alphaM = alpha * std12                          # Normalized alpha matrix
     
     # The TodCor matrix
     corrM = ((ccf1 + alphaM * ccf2) / np.sqrt(1.0 + 2.0 * alphaM * ccf12 + alphaM**2))
@@ -258,6 +316,11 @@ def todcor(obs, t1, t2, m, alpha=None):
         hiC2 = (ccf2 > corrM)                           # Fix ccf2 > corrM elements
         alphaM[hiC2] = largeNum;  corrM[hiC2] = ccf2[hiC2]
 
-    alphaM /= stdM                                 # Convert back to alpha matrix
+    alphaM /= std12                                     # Convert back to alpha matrix
 
-    return corrM, alphaM
+    if outAll:                                          # return the CCFs and STDs as a structured array
+        ccfOut = np.empty(ccf1.shape, dtype=[('ccf1','f4'),('ccf2','f4'),('ccf12','f4'),('std12','f4')])
+        ccfOut['ccf1'],ccfOut['ccf2'],ccfOut['ccf12'],ccfOut['std12'] = ccf1,ccf2,ccf12,std12
+        return corrM, alphaM, ccfOut
+    else:
+        return corrM, alphaM

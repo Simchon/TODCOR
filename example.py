@@ -103,7 +103,7 @@ plt.ylabel('Correlation')
 
 # Compute the TODCOR correlation matrix, first for finding the best flux ratio (alpha)
 s1 = time.time()
-corrM1, alphaM = todcor(obs, t1, t2, m)                     # TODCOR alpha-fitting mode
+corrM1, alphaM, ccfs = todcor(obs, t1, t2, m, outAll=True)  # TODCOR alpha-fitting mode
 print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, Alpha-fit TODCOR runtime = {(time.time()-s1):1.4f}")
 
 # Find best alpha using the maximum-CCF indices
@@ -112,7 +112,8 @@ bestAlpha = alphaM[maxIdx1]                                 # best alpha at max 
 
 # Recalculate TODCOR using the best alpha
 s1 = time.time()
-corrM, _ = todcor(obs, t1, t2, m, bestAlpha)                # TODCOR with input alpha
+#corrMo, _ = todcor(obs, t1, t2, m, bestAlpha)               # TODCOR with input alpha
+corrM, _ = todcor(alpha = bestAlpha, ccfInput = ccfs)       # Fast TODCOR with input alpha (using the first todcor 1d ccfs)
 print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, fixed-alpha TODCOR runtime = {(time.time()-s1):1.4f}")
 maxIdx = np.unravel_index(np.argmax(corrM), corrM.shape)    # max TODCOR indices
 bestRV = (np.array(maxIdx)-m) * dRV                         # The best RV shifts of the two templates
