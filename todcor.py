@@ -40,7 +40,7 @@ def winNormCorr(x, y, m, n=None):
         xStd = np.zeros(2*m+1, dtype='f4') + np.std(x);  yStd = np.zeros(2*m+1, dtype='f4') + np.std(y)
         return corr, xStd, yStd
     
-    xn = x[k-m : l-(k-m)]; yn = y[k-m : l-(k-m)]        # Remove unneeded elements
+    xn = x[k-m : l-(k-m)]; yn = y[k-m : l-(k-m)]; l = len(xn)   # Remove unneeded elements
     
     # Normalize the arrays
     xInStd = np.std(xn); yInStd = np.std(yn)
