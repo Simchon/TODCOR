@@ -3,21 +3,26 @@ import warnings
 import time
 import pandas as pd
 import matplotlib.pyplot as plt
+from scipy.ndimage import shift
+from scipy.ndimage import gaussian_filter1d
 
 from todcor import *
 
-def exampleRandTemplate(alpha=0.6, rv=[3,-5], tempLen=100):
-    # Returns a simulated observed spectrum built by combining two shifted random vectors   
-    np.random.seed(42)
-    t1 = np.random.rand(tempLen).astype('f4')             # First template
-    t2 = np.random.rand(tempLen).astype('f4')             # Second template
-    obs = np.roll(t1, rv[0]) + alpha * np.roll(t2, rv[1]) # Simulated observed spectrum
-    m = 10                                                # CCF range from lag -m to +m
+def exampleRandTemplate(alpha=0.6, rv=[3.3,-5.5], tempLen=200, snr=None):
+    # Returns a simulated observed spectrum built by combining two shifted random vectors
+    smoothSig = 4.                                                                    # Gaussian smooth sigma
+    t1 = gaussian_filter1d(np.random.rand(tempLen), sigma=smoothSig).astype('f4')     # First template
+    t2 = gaussian_filter1d(np.random.rand(tempLen), sigma=smoothSig).astype('f4')     # Second template
+    # Simulated observed spectrum
+    obs = shift(t1, rv[0], mode='grid-wrap', order=3) + alpha * shift(t2, rv[1], mode='grid-wrap', order=3)
+    if snr and np.isfinite(snr) and snr > 0:
+        obs = np.random.poisson(obs * snr**2) / snr**2
+    m = 20                                                # CCF range from lag -m to +m
     dRV = 1.0
     return obs, t1, t2, rv, alpha, m, dRV
 
 
-def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200, tempLen=None):
+def examplePhoenixTemplate(alpha=0.6, rv=[30.3,-20.2], maxRV=200, tempLen=None, snr=None):
     """
     Returns a simulated observed spectrum built by combining two shifted, Phoenix-based, templates.
     Templates flux is normalized and wavelength is at even log steps
@@ -26,6 +31,7 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200, tempLen=None):
     alpha (float): The flux ratio of the two templates.
     rv [float,float]: The RV shifts of the two templates (km/s)
     maxRV (float): The maximum RV shift to be considered by TODCOR (km/s)
+    snr: Simulated spectrum Signal To Noise
 
     Returns:
     obs (float np array): The simulated observed spectrum
@@ -39,10 +45,10 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200, tempLen=None):
     C = 299792.458                                         # speed of light (km/s)
     #df1 = pd.read_csv('template_6000K_45_0_6198A-6402A.csv')
     df1 = pd.read_csv('template_6000K_45_0_6198A-6402A_10K.csv')
-    wv1 = df1.values[:,0]; t1 = df1.values[:,1].astype('f4')            # First template
+    wv1 = df1.values[:,0]; t1 = df1.values[:,1].astype('f4')*0.1 + 1    # First template
     #df2 = pd.read_csv('template_4500K_45_0_6198A-6402A.csv')
     df2 = pd.read_csv('template_4500K_45_0_6198A-6402A_10K.csv')
-    wv2 = df2.values[:,0]; t2 = df2.values[:,1].astype('f4')            # Second template
+    wv2 = df2.values[:,0]; t2 = df2.values[:,1].astype('f4')*0.1 + 1    # Second template
 
     if type(tempLen)==int and tempLen>0 and tempLen<t1.size:            # shorten the templates
         wv1 = wv1[:tempLen];  t1 = t1[:tempLen]
@@ -57,21 +63,69 @@ def examplePhoenixTemplate(alpha=0.6, rv=[30,-20], maxRV=200, tempLen=None):
     dRV = (np.exp(meanLogDiff)-1)*C                        # The templates RV resolution (km/s)
     m = round(maxRV/dRV)                                   # CCF range from lag -m to +m
 
-    obs = np.roll(t1, round(rv[0]/dRV)) + alpha * np.roll(t2, round(rv[1]/dRV))  # Simulated observed spectrum
+    # Simulated observed spectrum
+    obs = shift(t1, rv[0]/dRV, mode='grid-wrap', order=3) + alpha * shift(t2, rv[1]/dRV, mode='grid-wrap', order=3)
+    obs /= (1 + alpha)                                     # Normalize the simulated spectrum
+    if snr and np.isfinite(snr) and snr > 0:
+        obs = np.random.poisson(obs * snr**2) / snr**2
+
     return obs, t1, t2, rv, alpha, m, dRV
 
 
+def examplePlot(corrM, maxCCF, trueRV, bestRV, rvErr, trueAlpha, bestAlpha, alphaErr=None, dv=1., name=''):
+    # Plot the best-alpha TODCOR matrix as an image + cuts at maximum correlation
+    m = corrM.shape[0]//2
+    maxRV =  m * dRV                                         # Maximum RV shift to be considered by TODCOR (km/s)
+    ccfX = np.arange(-m, m + 1) * dRV                        # CCF x axis (RV axis)
+    maxIdx = np.unravel_index(np.argmax(corrM), corrM.shape) # max TODCOR indices
+    intBestRV = (np.array(maxIdx)-m) * dRV                   # The best integer RV shifts of the two templates
+    fig, ((ax, ax1),(ax2, axn)) = plt.subplots(2, 2, figsize=(12, 12), gridspec_kw={'height_ratios': [3, 1], 'width_ratios': [3, 1]})
+    im1 = ax.imshow(corrM, extent=np.array([-m-0.5, m+0.5, -m-0.5, m+0.5])*dRV, origin='lower', aspect='auto', cmap='viridis')
+    line = np.arange(-m-0.5,m+0.55,0.1)*dRV; point = line * 0
+    ax.plot(line,point+bestRV[0],'-r', alpha=0.25)
+    ax.plot(point+bestRV[1], line,'-r', alpha=0.25); #ax.grid(True)
+    ax.set_xlim([-maxRV,maxRV]); ax.set_ylim([-maxRV,maxRV])
+    #plt.colorbar(im1, label='Correlation')
+    ax2.plot(ccfX, corrM[maxIdx[0],:],'r',alpha=0.4); ax2.grid(True)
+    ax2.set_xlim([-maxRV,maxRV])
+    ax2.set_ylabel('Correlation')
+    ax2.legend(['Lag 1 = %1.0f km/s'%intBestRV[0]])
+    ax2.set_xlabel('Lag 2 (km/s)')
+    ax1.plot(corrM[:,maxIdx[1]], ccfX,'r',alpha=0.4); ax1.grid(True)
+    ax1.set_ylim([-maxRV,maxRV])
+    ax1.set_xlabel('Correlation')
+    ax1.legend(['Lag 2 = %1.0f km/s'%intBestRV[1]])
+    ax.set_ylabel('Lag 1 (km/s)')
+    sigErr = (bestRV-trueRV) / rvErr
+    if alphaErr:
+        aSigErr = (bestAlpha - trueAlpha) / alphaErr if alphaErr else 0.
+        alphaStr = fr'${bestAlpha:1.3f} \pm {alphaErr:1.3f} ({aSigErr:+1.1f} \sigma)$'
+    else:
+        alphaStr = fr'{bestAlpha:1.3f}'
+    if len(name) > 0:
+        name = name + ' - '
+    fig.suptitle(
+    fr'{name}{templateType}-Template TODCOR:  CCF['
+    fr'${bestRV[0]:1.3f} \pm {rvErr[0]:1.3f} ({sigErr[0]:+1.1f} \sigma), '
+    fr'{bestRV[1]:1.3f} \pm {rvErr[1]:1.3f} ({sigErr[1]:+1.1f} \sigma)$]'
+    fr'={maxCCF:1.3f}  Best_Alpha=' + alphaStr)
+    axn.axis('off')
 
 # TODCOR Example Code:
 
 # Produce simulated observed spectrum by combining two shifted templates
+trueAlpha = 0.4
+snr = 100
 templateType = 'Phoenix'
 #templateType = 'Random'
+np.random.seed(41)
 if templateType == 'Phoenix':
-    #obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=0.4, maxRV=125, tempLen=5700)   # Phoenix templates based simulated observed spectrum
-    obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=0.4)   # Phoenix templates based simulated observed spectrum
+    trueRV = np.array([30.3,-20.2])
+    #obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=trueAlpha, rv=trueRV, snr=snr, maxRV=125, tempLen=5700)   # Phoenix templates based simulated observed spectrum
+    obs, t1, t2, rv, alpha, m, dRV = examplePhoenixTemplate(alpha=trueAlpha, rv=trueRV, snr=snr)   # Phoenix templates based simulated observed spectrum
 elif templateType == 'Random':
-    obs, t1, t2, rv, alpha, m, dRV = exampleRandTemplate(alpha=0.4)     # Short random templates based simulated observed spectrum
+    trueRV = np.array([3.3,-5.5])
+    obs, t1, t2, rv, alpha, m, dRV = exampleRandTemplate(alpha=trueAlpha, rv=trueRV, snr=snr)      # Short random templates based simulated observed spectrum
 else:
     raise ValueError('Unknown templateType: %s' % templateType)
 maxRV = m * dRV        # Maximum RV shift to be considered by TODCOR (km/s)
@@ -101,45 +155,34 @@ plt.legend(['Observed vs. Temp1', 'Observed vs. Temp2', 'Temp1 vs. Temp2'])
 plt.xlabel('Lag (km/s)')
 plt.ylabel('Correlation')
 
+# TODCOR example 1:
+# First derive the best alpha, and then, for that alpha, the velocities and their uncertainties
+# (This example does not provide alpha uncertainty)
 # Compute the TODCOR correlation matrix, first for finding the best flux ratio (alpha)
 s1 = time.time()
 corrM1, alphaM, ccfs = todcor(obs, t1, t2, m, outAll=True)  # TODCOR alpha-fitting mode
 print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, Alpha-fit TODCOR runtime = {(time.time()-s1):1.4f}")
 
 # Find best alpha using the maximum-CCF indices
-maxIdx1 = np.unravel_index(np.argmax(corrM1), corrM1.shape) # max TODCOR indices
-bestAlpha = alphaM[maxIdx1]                                 # best alpha at max TODCOR indices
+maxIdx = np.unravel_index(np.argmax(corrM1), corrM1.shape)  # max TODCOR indices
+bestAlpha = alphaM[maxIdx]                                  # best alpha at max TODCOR indices
 
 # Recalculate TODCOR using the best alpha
 s1 = time.time()
 #corrMo, _ = todcor(obs, t1, t2, m, bestAlpha)               # TODCOR with input alpha
-corrM, _ = todcor(alpha = bestAlpha, ccfInput = ccfs)       # Fast TODCOR with input alpha (using the first todcor 1d ccfs)
+corrM, _ = todcor(alpha = bestAlpha, ccfInput = ccfs)        # Fast TODCOR with input alpha (using the first todcor 1d ccfs)
+bestRV, maxVal, rvErr = todcorVel(corrM, obs.size, dv=dRV)   # Sub-pixel best RV shifts, max CCF and RV shifts uncertainties
 print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, fixed-alpha TODCOR runtime = {(time.time()-s1):1.4f}")
-maxIdx = np.unravel_index(np.argmax(corrM), corrM.shape)    # max TODCOR indices
-bestRV = (np.array(maxIdx)-m) * dRV                         # The best RV shifts of the two templates
-maxVal = corrM[maxIdx]                                      # max TODCOR value
+examplePlot(corrM, maxVal, trueRV, bestRV, rvErr, trueAlpha, bestAlpha, name='Example 1')
 
-# Plot the best-alpha TODCOR matrix as an image + cuts at maximum correlation
-#plt.figure(2)
-fig, ((ax, ax1),(ax2, axn)) = plt.subplots(2, 2, figsize=(10, 10), gridspec_kw={'height_ratios': [3, 1], 'width_ratios': [3, 1]}, num=2)
-im1 = ax.imshow(corrM, extent=np.array([-m-0.5, m+0.5, -m-0.5, m+0.5])*dRV, origin='lower', aspect='auto', cmap='viridis')
-line = np.arange(-m-0.5,m+0.55,0.1)*dRV; point = line * 0
-ax.plot(line,point+bestRV[0],'-r', alpha=0.25)
-ax.plot(point+bestRV[1], line,'-r', alpha=0.25); #ax.grid(True)
-ax.set_xlim([-maxRV,maxRV]); ax.set_ylim([-maxRV,maxRV])
-#plt.colorbar(im1, label='Correlation')
-ax2.plot(ccfX, corrM[maxIdx[0],:],'r',alpha=0.4); ax2.grid(True)
-ax2.set_xlim([-maxRV,maxRV])
-ax2.set_ylabel('Correlation')
-ax2.legend(['Lag 1 = %1.1f km/s'%bestRV[0]])
-ax2.set_xlabel('Lag 2 (km/s)')
-ax1.plot(corrM[:,maxIdx[1]], ccfX,'r',alpha=0.4); ax1.grid(True)
-ax1.set_ylim([-maxRV,maxRV])
-ax1.set_xlabel('Correlation')
-ax1.legend(['Lag 2 = %1.1f km/s'%bestRV[1]])
-ax.set_ylabel('Lag 1 (km/s)')
-ax.set_title('%s-Templates TODCOR:  CCF[%1.1f,%1.1f]=%1.3f  Best_Alpha=%1.3f'%(templateType, bestRV[0], bestRV[1], maxVal, bestAlpha))
-axn.axis('off')
+
+# TODCOR example 2:
+# Simultanously derives the sub-pixel v1, v2 and alpha and their uncertainties
+s1 = time.time()
+bestRV3, bestAlpha3, maxVal3, err3, ccfs3 = todcorVelAlpha(obs, t1, t2, m, dv=dRV)
+corrM3, _ = todcor(alpha = bestAlpha3, ccfInput = ccfs3)     # Fast TODCOR with input alpha (using the first todcor 1d ccfs)
+print(f"Spectrum length = {obs.size}, TODCOR matrix shape = {corrM1.shape}, sub-pixel v1, v2, alpha fit TODCOR runtime = {(time.time()-s1):1.4f}")
+examplePlot(corrM3, maxVal3, trueRV, bestRV3, err3[:2], trueAlpha, bestAlpha3, alphaErr=err3[2], name='Example 2')
 
 plt.show()
 

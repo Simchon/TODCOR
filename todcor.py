@@ -324,3 +324,181 @@ def todcor(obs=None, t1=None, t2=None, m=None, alpha=None, ccfInput=None, outAll
         return corrM, alphaM, ccfOut
     else:
         return corrM, alphaM
+
+
+def todcorVel(M, Ns, dv=1.0, rad=1):
+    """
+    Estimate sub-pixel TODCOR-peak velocities and uncertainties via 2D quadratic fit.
+
+    Parameters:
+    M (np.ndarray): 2D TODCOR matrix.
+    Ns (int): Spectrum length (for error estimates)
+    dv (float): Velocity step per pixel.
+    rad (int): fit-patch radius
+
+    Returns:
+    vel (np.ndarray): [v1, v2] Peak sub-pixel velocities coordinates.
+    val (float): Interpolated TODCOR peak (CCF) value.
+    sig (np.ndarray): [σ_v1, σ_v2] estimated peak velocities uncertainties.
+    """
+    shape = np.array(M.shape)
+    center = shape // 2
+    idx = np.array(np.unravel_index(np.argmax(M), shape))
+
+    # Handle edge case: max on border
+    if np.any((idx < rad) | (idx >= shape - rad)):
+        vel = (idx - center) * dv
+        return vel, M[tuple(idx)], np.full(2, np.nan)
+
+    Nv = 2 * rad + 1
+    vVec = np.arange(-rad, rad + 1)
+
+    # Allocate data [0] and v1 [1], v2 [2] coordinates grids
+    # Grid shape=(kind, v1, v2)
+    grid = np.empty((3,Nv, Nv), dtype=np.float64)
+
+    # Fill data and coordinates vectorially
+    grid[0] = M[idx[0]-rad:idx[0]+rad+1, idx[1]-rad:idx[1]+rad+1]
+    grid[1] = vVec[:,None]    # v1 grid
+    grid[2] = vVec[None,:]    # v2 grid
+
+    # Build design matrix for 2nd-degree 2D polynomial and least-squares fitting
+    gridFlat = grid.reshape(3,-1)
+    powerVec = lambda x, y: np.array([x*x, y*y, x*y,
+                                      x, y, np.ones_like(x)])
+    A = powerVec(gridFlat[1], gridFlat[2]).T
+    cf, *_ = np.linalg.lstsq(A, gridFlat[0], rcond=None)
+
+    # Hessian and gradient
+    H = np.array([[2*cf[0], cf[2]],
+                  [cf[2], 2*cf[1]]])
+    grad = np.array([cf[3], cf[4]])
+
+    # Solve for peak offset (in pixels)
+    try:
+        delta = -np.linalg.solve(H, grad)
+    except np.linalg.LinAlgError:
+        delta = np.zeros(2)
+    #dv1, dv2 = delta
+
+    # TODCOR value at sub-pixel maximum
+    val = powerVec(delta[0],delta[1]) @ cf
+
+    # Not needed: Coefficients covariance using residual variance and A
+    #res = gridFlat[0] - A @ cf
+    #sigma2 = np.var(res, ddof=A.shape[1])
+    #cfCov = sigma2 * np.linalg.inv(A.T @ A)
+
+    try:
+        # Peak v1, v2, alpha coordinates covariance matrix and uncertainties sigma
+        maxCov = (1 - min(val,0.999999)**2)/Ns/val * -np.linalg.inv(H)
+        sig = np.sqrt(np.diag(maxCov)) * dv
+    except np.linalg.LinAlgError:
+        sig = np.full(2, np.nan)
+
+    # Final result: shifts from center + sub-pixel offsets, scaled to km/s
+    vel = (idx - center + delta) * dv
+    return vel, val, sig
+
+
+def todcorVelAlpha(obs=None, t1=None, t2=None, m=None, ccfInput=None, Ns=None, dAlpha=0.01, alphaRad=1, dv=1.0, rad=1):
+    """
+    Estimate sub-pixel TODCOR-peak coordinates using 3D quadratic fit in (v1, v2, alpha) space.
+
+    Parameters:
+    obs (np.ndarray): The observed spectrum of the binary star system.
+    t1 (np.ndarray): The template spectrum of the first star.
+    t2 (np.ndarray): The template spectrum of the second star.
+    m (int): The maximum lag to consider in both directions.
+    obs, t1, t2 & m are optional, as they are used only if ccfInput is None.
+    alpha (float): The flux ratio of the two components (to be normalized).
+    If alpha==None, the optimal positive alpha (highest CCF), per matrix element, is derived and used.
+    ccfInput (np.ndarray): An optional structured array with precomputed fields (ccf1, ccf2, ccf12, std12)
+                           of shape (2*m+1, 2*m+1). If provided, obs, t1, t2 & m are not needed,
+                           as the cross-correlation components are extracted from it, skipping their derivation.
+    Ns (int): Spectrum length (for error estimates). Should be provided if ccfInput=ccfs
+    dAlpha (float): alpha step size
+    alphaRad (int): radius of alpha grid (in pixels)
+    dv (float): velocity step per pixel (km/s)
+    rad (int): radius of v1,v2 patch (in pixels)
+
+    Returns:
+    vel (np.ndarray): [v1, v2] in km/s
+    alpha_est (float): sub-pixel alpha estimate
+    val (float): sub-pixel TODCOR maximum value
+    sig (np.ndarray): [σ_v1, σ_v2, σ_alpha] uncertainties
+    ccfs (np.ndarray): A structured numpy array with ccf & std matrices if outAll is True.
+    """
+    if ccfInput is None:
+        Ns = obs.size                           # spectrum length
+        M, alphaM, ccfs = todcor(obs, t1, t2, m, outAll=True)
+    else:
+        M, alphaM = todcor(ccfInput=ccfs)
+    shape = np.array(M.shape)
+    center = shape // 2
+    idx = np.array(np.unravel_index(np.argmax(M), shape))
+    bestAlpha = alphaM[tuple(idx)]                     # Optimized alpha at todocor maximum
+
+    # Handle edge case: max on border
+    if np.any((idx < rad) | (idx >= shape - rad)):
+        vel = (idx - center) * dv
+        return vel, bestAlpha, M[tuple(idx)], np.full(3, np.nan)
+
+    # Prepare alpha range and patch size
+    Na = 2 * alphaRad + 1
+    Nv = 2 * rad + 1
+    aVec = np.arange(-alphaRad, alphaRad + 1)
+    vVec = np.arange(-rad, rad + 1)
+
+    # Allocate data [0] and v1 [1], v2 [2], alpha [3] coordinates grids
+    # Grid shape=(kind, v1, v2, alpha)
+    grid = np.empty((4,Nv, Nv, Na), dtype=np.float64)
+
+    # Fill coordinates vectorially
+    grid[1] = vVec[:,None,None]    # v1 grid
+    grid[2] = vVec[None,:,None]    # v2 grid
+    grid[3] = aVec[None,None,:]    # alpha grid
+
+    # Evaluate TODCOR at each alpha and save into the data grid
+    for i, alpha in enumerate(aVec):
+        M, _ = todcor(ccfInput=ccfs, alpha=bestAlpha + alpha * dAlpha)
+        grid[0,:,:,i] = M[idx[0] - rad:idx[0] + rad + 1, idx[1] - rad:idx[1] + rad + 1]
+
+    # Build design matrix for 2nd-degree 3D polynomial and least-squares fitting
+    gridFlat = grid.reshape(4,-1)
+    powerVec = lambda x, y, z: np.array([x*x, y*y, z*z, x*y, x*z, y*z,
+                                         x, y, z, np.ones_like(x)])
+    A = powerVec(gridFlat[1], gridFlat[2], gridFlat[3]).T
+    cf, *_ = np.linalg.lstsq(A, gridFlat[0], rcond=None)
+
+    # Hessian and gradient
+    H = np.array([[2*cf[0], cf[3], cf[4]],
+                  [cf[3], 2*cf[1], cf[5]],
+                  [cf[4], cf[5], 2*cf[2]]])
+    grad = np.array([cf[6], cf[7], cf[8]])
+
+    # Solve for peak offset (in pixels)
+    try:
+        delta = -np.linalg.solve(H, grad)
+    except np.linalg.LinAlgError:
+        delta = np.zeros(3)
+
+    # TODCOR value at sub-pixel maximum
+    val = powerVec(delta[0], delta[1], delta[2]) @ cf
+
+    # Not needed: Coefficients covariance using residual variance and A
+    #res = gridFlat[0] - A @ cf
+    #sigma2 = np.var(res, ddof=A.shape[1])
+    #cfCov = sigma2 * np.linalg.inv(A.T @ A)
+
+    try:
+        # Peak v1, v2, alpha coordinates covariance matrix and uncertainties sigma
+        maxCov = (1 - min(val,0.99999)**2)/Ns/val * -np.linalg.inv(H)
+        sig = np.sqrt(np.diag(maxCov)) * np.array([dv, dv, dAlpha])
+    except np.linalg.LinAlgError:
+        sig = np.full(3, np.nan)
+
+    # Final result: shifts from center + sub-pixel offsets, scaled to km/s
+    vel = (idx - center + delta[:2]) * dv
+    alpha_est = bestAlpha + delta[2] * dAlpha  # Sub-pixel alpha estimate
+    return vel, alpha_est, val, sig, ccfs
